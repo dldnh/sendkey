@@ -4,6 +4,10 @@
 //
 //  Created by Dave Diamond on 2/23/21.
 //
+//////////////////////////////////////////////////////////////////
+//
+// license: MIT (see LICENSE)
+//
 // usage:
 //
 // $ swift main.swift -list
