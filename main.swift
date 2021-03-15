@@ -6,22 +6,24 @@
 //
 //////////////////////////////////////////////////////////////////
 //
-// license: MIT (see LICENSE)
+//  license: MIT (see LICENSE)
 //
-// usage:
+//  usage:
 //
-// $ swift main.swift -list
-// shows list of running apps' bundle id's
+//  $ swift main.swift -list
+//  shows list of running apps' bundle id's
 //
-// $ swift main.swift com.domain.App mods+key mods+key mods+key...
-// - com.domain.App is target app's bundle id
-// - mods is cmd+ctrl+shift+opt in any combination
-// - key is 2-digit hex or name from keytable
+//  $ swift main.swift com.domain.App mods+key mods+key mods+key...
+//  - com.domain.App is target app's bundle id
+//  - mods is cmd+ctrl+shift+opt in any combination
+//  - key is 2-digit hex or name from keytable
 //
-// example:
+//  example:
 //
-// $ swift main.swift com.apple.TextEdit t h e space q u i c k space b r o w n space f o x return cmd+a cmd+c cmd+v cmd+v cmd+v
-// types a message in TextEdit, then copies it and pastes it three times
+//  $ swift main.swift com.apple.TextEdit t h e space q u i c k space b r o w n space f o x return cmd+a cmd+c cmd+v cmd+v cmd+v
+//  types a message in TextEdit, then copies it and pastes it three times
+//  $ swift main.swift com.apple.TextEdit @"the quick brown fox" return 
+//  also types that famous message in TextEdit, but with less fuss and bother
 
 import Cocoa
 
@@ -66,6 +68,33 @@ let keytable: [String: UInt16] = [
     "leftarrow": 0x7b, "rightarrow": 0x7c, "downarrow": 0x7d, "uparrow": 0x7e,
 ]
 
+let check: UInt16 = 0x00
+let shift: UInt64 = CGEventFlags.maskShift.rawValue
+let chartable: [Character: (UInt16, UInt64)] = [
+    " ": (0x31, 0), "!": (0x12, shift), "#": (0x14, shift), "$": (0x15, shift),
+    "%": (0x17, shift), "&": (0x1a, shift), "'": (0x27, 0), "(": (0x19, shift),
+    ")": (0x1d, shift), "*": (0x1c, shift), "+": (0x1b, shift), ",": (0x2b, 0), "-": (0x1b, 0),
+    ".": (0x2f, 0), "/": (0x2c, 0), "0": (0x1d, 0), "1": (0x12, 0), "2": (0x13, 0),
+    "3": (0x14, 0), "4": (0x15, 0), "5": (0x17, 0), "6": (0x16, 0), "7": (0x1a, 0),
+    "8": (0x1c, 0), "9": (0x19, 0), ":": (0x29, shift), ";": (0x29, 0), "<": (0x2b, shift),
+    "=": (0x18, 0), ">": (0x2f, shift), "?": (0x2c, shift), "@": (0x13, shift),
+    "A": (0x00, shift), "B": (0x0b, shift), "C": (0x08, shift), "D": (0x02, shift),
+    "E": (0x0e, shift), "F": (0x03, shift), "G": (0x05, shift), "H": (0x04, shift),
+    "I": (0x22, shift), "J": (0x26, shift), "K": (0x28, shift), "L": (0x25, shift),
+    "M": (0x2e, shift), "N": (0x2d, shift), "O": (0x1f, shift), "P": (0x23, shift),
+    "Q": (0x0c, shift), "R": (0x0f, shift), "S": (0x01, shift), "T": (0x11, shift),
+    "U": (0x20, shift), "V": (0x09, shift), "W": (0x0d, shift), "X": (0x07, shift),
+    "Y": (0x10, shift), "Z": (0x06, shift), "[": (0x21, 0), "\"": (0x27, shift),
+    "\\": (0x2a, 0), "\n": (0x24, 0), "\t": (0x30, 0), "]": (0x1e, 0), "^": (0x16, shift),
+    "_": (0x1b, shift), "`": (0x32, 0), "a": (0x00, 0), "b": (0x0b, 0), "c": (0x08, 0),
+    "d": (0x02, 0), "e": (0x0e, 0), "f": (0x03, 0), "g": (0x05, 0), "h": (0x04, 0),
+    "i": (0x22, 0), "j": (0x26, 0), "k": (0x28, 0), "l": (0x25, 0), "m": (0x2e, 0),
+    "n": (0x2d, 0), "o": (0x1f, 0), "p": (0x23, 0), "q": (0x0c, 0), "r": (0x0f, 0),
+    "s": (0x01, 0), "t": (0x11, 0), "u": (0x20, 0), "v": (0x09, 0), "w": (0x0d, 0),
+    "x": (0x07, 0), "y": (0x10, 0), "z": (0x06, 0), "{": (0x21, shift), "|": (0x2a, shift),
+    "}": (0x1e, shift), "~": (0x32, shift),
+]
+
 var keys = [UInt16]()
 var flags = [CGEventFlags]()
 var needToActivate = false
@@ -74,7 +103,19 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
     var key: UInt16?
     var arg: String!
     var mask: UInt64 = 0
-    if arg0.contains("+") {
+    if arg0.starts(with: "@") {
+        let start = arg0.index(arg0.startIndex, offsetBy: 1)
+        let end = arg0.index(arg0.endIndex, offsetBy: 0)
+        for char in arg0[start..<end] {
+            print("send \(char)")
+            (key, mask) = chartable[char]!
+            keys.append(key!)
+            let flag = CGEventFlags(rawValue: mask)
+            flags.append(flag)
+            mask = 0
+        }
+        continue
+    } else if arg0.contains("+") {
         let split = arg0.split(separator: "+").reversed()
         arg = String(split.first!)
         for (j, meta) in split.enumerated() where j > 0 {
