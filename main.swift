@@ -38,6 +38,13 @@ if CommandLine.argc == 2 && CommandLine.arguments[1] == "-list" {
     exit(0)
 }
 
+var needToActivate = false
+
+if CommandLine.argc >= 2 && CommandLine.arguments[1] == "-activate" {
+    CommandLine.arguments.remove(at: 1)
+    needToActivate = true
+}
+
 if CommandLine.argc <= 2 {
     print("missing args")
     exit(0)
@@ -68,7 +75,6 @@ let keytable: [String: UInt16] = [
     "leftarrow": 0x7b, "rightarrow": 0x7c, "downarrow": 0x7d, "uparrow": 0x7e,
 ]
 
-let check: UInt16 = 0x00
 let shift: UInt64 = CGEventFlags.maskShift.rawValue
 let chartable: [Character: (UInt16, UInt64)] = [
     " ": (0x31, 0), "!": (0x12, shift), "#": (0x14, shift), "$": (0x15, shift),
@@ -97,17 +103,39 @@ let chartable: [Character: (UInt16, UInt64)] = [
 
 var keys = [UInt16]()
 var flags = [CGEventFlags]()
-var needToActivate = false
+var preKeysArr = [[CGEvent]]()
+var postKeysArr = [[CGEvent]]()
+
+let src = CGEventSource(stateID: CGEventSourceStateID.hidSystemState)
+
+// inspired by the diagram at https://stackoverflow.com/a/28012706
+let commandKey: UInt16 = 0x37
+let shiftKey: UInt16 = 0x38
+let capslockKey: UInt16 = 0x39
+let optionKey: UInt16 = 0x3a
+let controlKey: UInt16 = 0x3b
+
+let commandDown = CGEvent(keyboardEventSource: src, virtualKey: commandKey, keyDown: true)!
+let commandUp = CGEvent(keyboardEventSource: src, virtualKey: commandKey, keyDown: false)!
+let shiftDown = CGEvent(keyboardEventSource: src, virtualKey: shiftKey, keyDown: true)!
+let shiftUp = CGEvent(keyboardEventSource: src, virtualKey: shiftKey, keyDown: false)!
+let capslockDown = CGEvent(keyboardEventSource: src, virtualKey: capslockKey, keyDown: true)!
+let capslockUp = CGEvent(keyboardEventSource: src, virtualKey: capslockKey, keyDown: false)!
+let optionDown = CGEvent(keyboardEventSource: src, virtualKey: optionKey, keyDown: true)!
+let optionUp = CGEvent(keyboardEventSource: src, virtualKey: optionKey, keyDown: false)!
+let controlDown = CGEvent(keyboardEventSource: src, virtualKey: controlKey, keyDown: true)!
+let controlUp = CGEvent(keyboardEventSource: src, virtualKey: controlKey, keyDown: false)!
 
 for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
     var key: UInt16?
     var arg: String!
     var mask: UInt64 = 0
+    var preKeys = [CGEvent]()
+    var postKeys = [CGEvent]()
     if arg0.starts(with: "@") {
         let start = arg0.index(arg0.startIndex, offsetBy: 1)
         let end = arg0.index(arg0.endIndex, offsetBy: 0)
         for char in arg0[start..<end] {
-            print("send \(char)")
             (key, mask) = chartable[char]!
             keys.append(key!)
             let flag = CGEventFlags(rawValue: mask)
@@ -121,18 +149,30 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
         for (j, meta) in split.enumerated() where j > 0 {
             switch meta {
             case "cmd":
+                preKeys.append(commandDown)
+                postKeys.append(commandUp)
                 mask |= CGEventFlags.maskCommand.rawValue
                 needToActivate = true
                 break
             case "ctrl":
+                preKeys.append(controlDown)
+                postKeys.append(controlUp)
                 mask |= CGEventFlags.maskControl.rawValue
                 break
             case "shift":
+                preKeys.append(shiftDown)
+                postKeys.append(shiftUp)
                 mask |= CGEventFlags.maskShift.rawValue
                 break
             case "opt":
+                preKeys.append(optionDown)
+                postKeys.append(optionUp)
                 mask |= CGEventFlags.maskAlternate.rawValue
                 needToActivate = true
+                break
+            case "lock":
+                preKeys.append(capslockDown)
+                postKeys.append(capslockUp)
                 break
             default:
                 print("Could not parse: \(meta)")
@@ -153,10 +193,18 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
         exit(-1)
     }
     keys.append(key!)
+    preKeysArr.append(preKeys)
+    postKeysArr.append(postKeys)
 }
 
 if keys.count != flags.count {
     print("Internal error, keys/flags counts mismatch \(keys.count)/\(flags.count)")
+    exit(-1)
+} else if keys.count != preKeysArr.count {
+    print("Internal error, keys/preKeyss counts mismatch \(keys.count)/\(preKeysArr.count)")
+    exit(-1)
+} else if keys.count != postKeysArr.count {
+    print("Internal error, keys/postKeyss counts mismatch \(keys.count)/\(postKeysArr.count)")
     exit(-1)
 }
 
@@ -183,22 +231,30 @@ if needToActivate {
     app.activate(options: .activateIgnoringOtherApps)
 }
 
-let src = CGEventSource(stateID: CGEventSourceStateID.hidSystemState)
+let betweenKeyNaptime: useconds_t = 100_000
 
 for (i, key) in keys.enumerated() {
-    guard let keydown = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true) else {
-        fatalError("Can't get keydown")
-    }
+    let keydown = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)!
     keydown.flags = flags[i]
 
-    guard let keyup = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false) else {
-        fatalError("Can't get keydown")
-    }
+    let keyup = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)!
     keyup.flags = flags[i]
 
+    for preKey in preKeysArr[i] {
+        preKey.flags = flags[i]
+        preKey.postToPid(pid)
+        usleep(betweenKeyNaptime)
+    }
+
     keydown.postToPid(pid)
-    usleep(10_000)
+    usleep(betweenKeyNaptime)
     keyup.postToPid(pid)
+
+    for postKey in postKeysArr[i] {
+        usleep(betweenKeyNaptime)
+        postKey.flags = flags[i]
+        postKey.postToPid(pid)
+    }
 }
 
 if needToActivate {
