@@ -27,7 +27,22 @@
 
 import Cocoa
 
-if CommandLine.argc == 2 && CommandLine.arguments[1] == "-list" {
+let oneArg = CommandLine.argc == 2 ? CommandLine.arguments[1] : nil
+
+if oneArg == "-h" || oneArg == "-help" {
+    print("""
+          sendkey [ options ] target-app event...
+          options:
+            -list       : list applications
+            -activate   : force activation of target-app
+          event:
+            (cmd/opt/ctrl/shift)+keyname
+            @"string"
+          """)
+    exit(0)
+}
+
+if oneArg == "-list" {
     for app in NSWorkspace.shared.runningApplications
             .filter({ $0.activationPolicy == .regular }) {
         guard let bid = app.bundleIdentifier else {
@@ -140,6 +155,8 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
             keys.append(key!)
             let flag = CGEventFlags(rawValue: mask)
             flags.append(flag)
+            preKeysArr.append(preKeys)
+            postKeysArr.append(postKeys)
             mask = 0
         }
         continue
@@ -215,6 +232,27 @@ for x in NSWorkspace.shared.runningApplications {
         pid = x.processIdentifier
         break
     }
+}
+
+if pid < 0 {
+    let bidLC = bid.lowercased()
+    for x in NSWorkspace.shared.runningApplications {
+        if x.activationPolicy != .regular { continue }
+        guard let xBid = x.bundleIdentifier else { continue }
+        let parts = xBid.lowercased().split(separator: ".")
+        for p in parts where p == bidLC {
+            if pid >= 0 {
+                print("Multiple running apps matching \(bid)")
+                exit(-1)
+            }
+            pid = x.processIdentifier
+        }
+    }
+}
+
+if pid < 0 {
+    print("Can't find target app matching \(bid)")
+    exit(-1)
 }
 
 guard let app = NSRunningApplication(processIdentifier: pid) else {
