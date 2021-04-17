@@ -42,6 +42,13 @@ if oneArg == "-h" || oneArg == "-help" {
     exit(0)
 }
 
+if oneArg == "-locate" {
+    let wrongLoc = NSEvent.mouseLocation
+    let rightLoc = CGPoint(x: wrongLoc.x, y: NSScreen.main!.frame.height - wrongLoc.y)
+    print("\(rightLoc)")
+    exit(0)
+}
+
 if oneArg == "-list" {
     for app in NSWorkspace.shared.runningApplications
             .filter({ $0.activationPolicy == .regular }) {
@@ -116,10 +123,18 @@ let chartable: [Character: (UInt16, UInt64)] = [
     "}": (0x1e, shift), "~": (0x32, shift),
 ]
 
+enum What {
+    case key
+    case mouse
+}
+
+var whats = [What]()
 var keys = [UInt16]()
 var flags = [CGEventFlags]()
 var preKeysArr = [[CGEvent]]()
 var postKeysArr = [[CGEvent]]()
+var points = [CGPoint]()
+var states = [Int64]()
 
 let src = CGEventSource(stateID: CGEventSourceStateID.hidSystemState)
 
@@ -147,6 +162,8 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
     var mask: UInt64 = 0
     var preKeys = [CGEvent]()
     var postKeys = [CGEvent]()
+    var point: CGPoint!
+    var state: Int64 = 1
     if arg0.starts(with: "@") {
         let start = arg0.index(arg0.startIndex, offsetBy: 1)
         let end = arg0.index(arg0.endIndex, offsetBy: 0)
@@ -160,6 +177,10 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
             mask = 0
         }
         continue
+    } else if arg0.contains("@") && !arg0.starts(with: "@") {
+        let split = arg0.split(separator: "@")
+        state = Int64(split[0])!
+        arg = String(split[1])
     } else if arg0.contains("+") {
         let split = arg0.split(separator: "+").reversed()
         arg = String(split.first!)
@@ -201,21 +222,49 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
     }
     let flag = CGEventFlags(rawValue: mask)
     flags.append(flag)
-    key = keytable[arg]
-    if key == nil {
-        key = UInt16(arg, radix: 16)
+    let split = arg.split(separator: ",")
+    if split.count != 2 {
+        key = keytable[arg]
+        if key == nil {
+            key = UInt16(arg, radix: 16)
+        }
+        if key == nil {
+            print("Could not look up or parse: \(arg!)")
+            exit(-1)
+        }
+        keys.append(key!)
+        points.append(CGPoint())
+        states.append(0)
+        whats.append(.key)
+    } else {
+        guard let x = Double(split[0]) else {
+            print("Could ot parse float: \(split[0])")
+            exit(-1)
+        }
+        guard let y = Double(split[1]) else {
+            print("Could ot parse float: \(split[1])")
+            exit(-1)
+        }
+        point = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        if point == nil {
+            print("Could not look up or parse: \(arg!)")
+            exit(-1)
+        }
+        points.append(point!)
+        states.append(state)
+        keys.append(.max)
+        whats.append(.mouse)
+        needToActivate = true
     }
-    if key == nil {
-        print("Could not look up or parse: \(arg!)")
-        exit(-1)
-    }
-    keys.append(key!)
     preKeysArr.append(preKeys)
     postKeysArr.append(postKeys)
 }
 
 if keys.count != flags.count {
     print("Internal error, keys/flags counts mismatch \(keys.count)/\(flags.count)")
+    exit(-1)
+} else if points.count != flags.count {
+    print("Internal error, points/flags counts mismatch \(points.count)/\(flags.count)")
     exit(-1)
 } else if keys.count != preKeysArr.count {
     print("Internal error, keys/preKeyss counts mismatch \(keys.count)/\(preKeysArr.count)")
@@ -237,8 +286,12 @@ for x in NSWorkspace.shared.runningApplications {
 if pid < 0 {
     let bidLC = bid.lowercased()
     for x in NSWorkspace.shared.runningApplications {
-        if x.activationPolicy != .regular { continue }
-        guard let xBid = x.bundleIdentifier else { continue }
+        if x.activationPolicy != .regular {
+            continue
+        }
+        guard let xBid = x.bundleIdentifier else {
+            continue
+        }
         let parts = xBid.lowercased().split(separator: ".")
         for p in parts where p == bidLC {
             if pid >= 0 {
@@ -271,27 +324,40 @@ if needToActivate {
 
 let betweenKeyNaptime: useconds_t = 100_000
 
-for (i, key) in keys.enumerated() {
-    let keydown = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)!
-    keydown.flags = flags[i]
-
-    let keyup = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)!
-    keyup.flags = flags[i]
-
-    for preKey in preKeysArr[i] {
-        preKey.flags = flags[i]
-        preKey.postToPid(pid)
+for (i, what) in whats.enumerated() {
+    if what == .key {
+        let key = keys[i]
+        let keydown = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)!
+        keydown.flags = flags[i]
+        let keyup = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)!
+        keyup.flags = flags[i]
+        for preKey in preKeysArr[i] {
+            preKey.flags = flags[i]
+            preKey.postToPid(pid)
+            usleep(betweenKeyNaptime)
+        }
+        keydown.postToPid(pid)
         usleep(betweenKeyNaptime)
-    }
-
-    keydown.postToPid(pid)
-    usleep(betweenKeyNaptime)
-    keyup.postToPid(pid)
-
-    for postKey in postKeysArr[i] {
+        keyup.postToPid(pid)
+        for postKey in postKeysArr[i] {
+            usleep(betweenKeyNaptime)
+            postKey.flags = flags[i]
+            postKey.postToPid(pid)
+        }
+    } else if what == .mouse {
+        let point = points[i]
+        let moveEvent = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
+        let downEvent = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)!
+        let upEvent = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)!
+        downEvent.setIntegerValueField(.mouseEventClickState, value: states[i])
+        upEvent.setIntegerValueField(.mouseEventClickState, value: states[i])
+        moveEvent.post(tap: .cghidEventTap)
         usleep(betweenKeyNaptime)
-        postKey.flags = flags[i]
-        postKey.postToPid(pid)
+        downEvent.post(tap: .cghidEventTap)
+        usleep(betweenKeyNaptime)
+        upEvent.post(tap: .cghidEventTap)
+    } else {
+        fatalError("I don't know what \(what) is")
     }
 }
 
