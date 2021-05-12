@@ -61,6 +61,7 @@ if oneArg == "-list" {
 }
 
 var needToActivate = false
+var sleeping = false
 
 if CommandLine.argc >= 2 && CommandLine.arguments[1] == "-activate" {
     CommandLine.arguments.remove(at: 1)
@@ -170,8 +171,10 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
         for char in arg0[start..<end] {
             (key, mask) = chartable[char]!
             keys.append(key!)
+            whats.append(.key)
             let flag = CGEventFlags(rawValue: mask)
             flags.append(flag)
+            points.append(CGPoint())
             preKeysArr.append(preKeys)
             postKeysArr.append(postKeys)
             mask = 0
@@ -217,6 +220,10 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
                 exit(-1)
             }
         }
+    } else if arg0.starts(with: "%") {
+        needToActivate = true
+        sleeping = true
+        continue
     } else {
         arg = arg0
     }
@@ -320,6 +327,10 @@ guard let own = getOwner() else {
 
 if needToActivate {
     app.activate(options: .activateIgnoringOtherApps)
+}
+
+if sleeping {
+    usleep(5_000_000)
 }
 
 let betweenKeyNaptime: useconds_t = 100_000
