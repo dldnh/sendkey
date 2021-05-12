@@ -127,6 +127,20 @@ let chartable: [Character: (UInt16, UInt64)] = [
 enum What {
     case key
     case mouse
+    case scroll
+}
+
+enum ScrollDir {
+    case up
+    case down
+    case left
+    case right
+    case none
+}
+
+struct Scroll {
+    var dir: ScrollDir = .none
+    var amount: Int32 = 0
 }
 
 var whats = [What]()
@@ -136,6 +150,7 @@ var preKeysArr = [[CGEvent]]()
 var postKeysArr = [[CGEvent]]()
 var points = [CGPoint]()
 var states = [Int64]()
+var scrolls = [Scroll]()
 
 let src = CGEventSource(stateID: CGEventSourceStateID.hidSystemState)
 
@@ -165,6 +180,7 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
     var postKeys = [CGEvent]()
     var point: CGPoint!
     var state: Int64 = 1
+    var scroll = Scroll()
     if arg0.starts(with: "@") {
         let start = arg0.index(arg0.startIndex, offsetBy: 1)
         let end = arg0.index(arg0.endIndex, offsetBy: 0)
@@ -175,6 +191,7 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
             let flag = CGEventFlags(rawValue: mask)
             flags.append(flag)
             points.append(CGPoint())
+            scrolls.append(Scroll())
             preKeysArr.append(preKeys)
             postKeysArr.append(postKeys)
             mask = 0
@@ -220,6 +237,29 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
                 exit(-1)
             }
         }
+    } else if arg0.contains("^") {
+        arg = arg0
+        let start = arg0.index(arg0.startIndex, offsetBy: 1)
+        let rest = arg0[start..<arg0.endIndex]
+        let split = rest.split(separator: "=")
+        if split.count != 2 {
+            print("Illegal scroll: \(rest)")
+        }
+        switch split[0] {
+        case "up": scroll.dir = .up
+        case "down": scroll.dir = .down
+        case "left": scroll.dir = .left
+        case "right": scroll.dir = .right
+        default:
+            print("Illegal direction: \(split[0])")
+            exit(-1)
+        }
+        guard let amount = Int32(split[1]) else {
+            print("Illegal amount: \(split[1])")
+            exit(-1)
+        }
+        scroll.amount = amount
+        needToActivate = true
     } else if arg0.starts(with: "%") {
         needToActivate = true
         sleeping = true
@@ -230,7 +270,12 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
     let flag = CGEventFlags(rawValue: mask)
     flags.append(flag)
     let split = arg.split(separator: ",")
-    if split.count != 2 {
+    if scroll.dir != .none {
+        whats.append(.scroll)
+        keys.append(.max)
+        points.append(CGPoint())
+        states.append(0)
+    } else if split.count != 2 {
         key = keytable[arg]
         if key == nil {
             key = UInt16(arg, radix: 16)
@@ -263,6 +308,7 @@ for (i, arg0) in CommandLine.arguments.enumerated() where i > 1 {
         whats.append(.mouse)
         needToActivate = true
     }
+    scrolls.append(scroll)
     preKeysArr.append(preKeys)
     postKeysArr.append(postKeys)
 }
@@ -272,6 +318,9 @@ if keys.count != flags.count {
     exit(-1)
 } else if points.count != flags.count {
     print("Internal error, points/flags counts mismatch \(points.count)/\(flags.count)")
+    exit(-1)
+} else if scrolls.count != flags.count {
+    print("Internal error, scrolls/flags counts mismatch \(scrolls.count)/\(flags.count)")
     exit(-1)
 } else if keys.count != preKeysArr.count {
     print("Internal error, keys/preKeyss counts mismatch \(keys.count)/\(preKeysArr.count)")
@@ -367,6 +416,20 @@ for (i, what) in whats.enumerated() {
         downEvent.post(tap: .cghidEventTap)
         usleep(betweenKeyNaptime)
         upEvent.post(tap: .cghidEventTap)
+    } else if what == .scroll {
+        let scroll = scrolls[i]
+        var wheel1: Int32 = 0
+        var wheel2: Int32 = 0
+        let wheel3: Int32 = 0
+        switch scroll.dir {
+        case .up: wheel1 = scroll.amount
+        case .down: wheel1 = -scroll.amount
+        case .left: wheel2 = scroll.amount
+        case .right: wheel2 = -scroll.amount
+        case .none: fatalError()
+        }
+        let evt = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: wheel1, wheel2: wheel2, wheel3: wheel3)!
+        evt.post(tap: .cghidEventTap)
     } else {
         fatalError("I don't know what \(what) is")
     }
